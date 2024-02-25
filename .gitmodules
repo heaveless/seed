@@ -1,0 +1,3 @@
+[submodule "rawdraw"]
+    path = lib/rawdraw
+    url = https://github.com/cntools/rawdraw.git
