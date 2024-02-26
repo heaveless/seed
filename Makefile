@@ -53,7 +53,7 @@ $(KS_FILE):
 	-validity 10000 -storepass $(KS_PWD) \
 	-keypass $(KS_PWD) -dname $(KS_DNAME)
 
-run: mktmp.apk
+run: clean mktmp.apk
 	adb install -r $(APP_NAME).apk
 	adb shell am start -n com.heaveless.seed/android.app.NativeActivity
 
