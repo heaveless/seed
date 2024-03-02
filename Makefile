@@ -18,17 +18,14 @@ ANDROID_TLS = $(lastword $(wildcard $(ANDROID_SDK)/build-tools/*))
 ANDROID_CLC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(ANDROID_VER)-clang
 
 # Processing
-CSRCS = main.c android_native_app_glue.c
+CSRCS = src/main.c android/native_app_glue.c
 CTARGETS = build/lib/arm64-v8a/lib$(APP_NAME).so
 
 # CC Flags
-CFLAGS = -ffunction-sections -Os -fdata-sections -Wall -fvisibility=hidden
-CFLAGS += -Os -DANDROID -DAPPNAME=\"$(APP)\" -DANDROID_FULLSCREEN
-CFLAGS += -Irawdraw -I$(ANDROID_NDK)/sysroot/usr/include -I$(ANDROID_NDK)/sysroot/usr/include/android -I$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include -I$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/android -fPIC -I. -DANDROIDVERSION=$(ANDROID_VER)
-LDFLAGS = -Wl,--gc-sections -Wl,-Map=output.map -s
-LDFLAGS += -lm -landroid -llog -lOpenSLES -lGLESv3 -lEGL
-LDFLAGS += -shared -uANativeActivity_onCreate
-LDFLAGS += -m64
+CFLAGS = -Iandroid
+CFLAGS += -I$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
+CFLAGS += -I$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/android
+LDFLAGS = -landroid -llog -shared -m64
 
 $(CTARGETS): $(CSRCS)
 	mkdir -p build/lib/arm64-v8a
@@ -63,7 +60,6 @@ clean:
 	rm -rf tmp.apk
 	rm -rf mktmp.apk
 	rm -rf build
-	rm -rf output.map
 	rm -rf $(APP_NAME).apk
 	rm -rf $(APP_NAME).apk.idsig
 

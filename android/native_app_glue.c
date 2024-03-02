@@ -12,8 +12,9 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
  */
+
+#include "native_app_glue.h"
 
 #include <jni.h>
 
@@ -21,55 +22,18 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/resource.h>
 
-#include "android_native_app_glue.h"
 #include <android/log.h>
-#include <android/native_activity.h>
 
-#include "webview_native_activity.h"
-struct android_app * gapp;
-
-#define LOGI(...) ((void)printf(__VA_ARGS__))
-#define LOGE(...) ((void)printf(__VA_ARGS__))
+#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "threaded_app", __VA_ARGS__))
+#define LOGE(...) ((void)__android_log_print(ANDROID_LOG_ERROR, "threaded_app", __VA_ARGS__))
 
 /* For debug builds, always enable the debug traces in this library */
-
 #ifndef NDEBUG
-#  define LOGV(...)  ((void)printf(__VA_ARGS__))
+#  define LOGV(...)  ((void)__android_log_print(ANDROID_LOG_VERBOSE, "threaded_app", __VA_ARGS__))
 #else
 #  define LOGV(...)  ((void)0)
 #endif
-
-
-typedef struct  __attribute__((packed))
-{
-	void (*callback)( void * ); 
-	void * opaque;
-} MainThreadCallbackProps;
-
-static int pfd[2];
-pthread_t debug_capture_thread;
-static void * debug_capture_thread_fn( void * v )
-{
-	//struct android_app * app = (struct android_app*)v;
-    ssize_t readSize;
-    char buf[2048];
-
-    while((readSize = read(pfd[0], buf, sizeof buf - 1)) > 0) {
-        if(buf[readSize - 1] == '\n') {
-            --readSize;
-        }
-        buf[readSize] = 0;  // add null-terminator
-        __android_log_write(ANDROID_LOG_DEBUG, APPNAME, buf); // Set any log level you want
-#ifdef RDALOGFNCB
-		extern void RDALOGFNCB( int size, char * buf );
-		RDALOGFNCB( readSize, buf );
-#endif
-		//if( debug_capture_hook_function ) debug_capture_hook_function( readSize, buf );
-    }
-    return 0;
-}
 
 static void free_saved_state(struct android_app* android_app) {
     pthread_mutex_lock(&android_app->mutex);
@@ -83,22 +47,15 @@ static void free_saved_state(struct android_app* android_app) {
 
 int8_t android_app_read_cmd(struct android_app* android_app) {
     int8_t cmd;
-    if (read(android_app->msgread, &cmd, sizeof(cmd)) == sizeof(cmd)) {
-        switch (cmd) {
-            case APP_CMD_SAVE_STATE:
-                free_saved_state(android_app);
-                break;
-        }
-        return cmd;
-    } else {
+    if (read(android_app->msgread, &cmd, sizeof(cmd)) != sizeof(cmd)) {
         LOGE("No data on command pipe!");
+        return -1;
     }
-    return -1;
+    if (cmd == APP_CMD_SAVE_STATE) free_saved_state(android_app);
+    return cmd;
 }
 
 static void print_cur_config(struct android_app* android_app) {
-	//For additional debugging this can be enabled, but for now - no need for the extra space.
-/*
     char lang[2], country[2];
     AConfiguration_getLanguage(android_app->config, lang);
     AConfiguration_getCountry(android_app->config, country);
@@ -121,13 +78,12 @@ static void print_cur_config(struct android_app* android_app) {
             AConfiguration_getScreenLong(android_app->config),
             AConfiguration_getUiModeType(android_app->config),
             AConfiguration_getUiModeNight(android_app->config));
-*/
 }
 
 void android_app_pre_exec_cmd(struct android_app* android_app, int8_t cmd) {
     switch (cmd) {
         case APP_CMD_INPUT_CHANGED:
-            LOGV("APP_CMD_INPUT_CHANGED\n");
+            LOGV("APP_CMD_INPUT_CHANGED");
             pthread_mutex_lock(&android_app->mutex);
             if (android_app->inputQueue != NULL) {
                 AInputQueue_detachLooper(android_app->inputQueue);
@@ -144,7 +100,7 @@ void android_app_pre_exec_cmd(struct android_app* android_app, int8_t cmd) {
             break;
 
         case APP_CMD_INIT_WINDOW:
-            LOGV("APP_CMD_INIT_WINDOW\n");
+            LOGV("APP_CMD_INIT_WINDOW");
             pthread_mutex_lock(&android_app->mutex);
             android_app->window = android_app->pendingWindow;
             pthread_cond_broadcast(&android_app->cond);
@@ -152,7 +108,7 @@ void android_app_pre_exec_cmd(struct android_app* android_app, int8_t cmd) {
             break;
 
         case APP_CMD_TERM_WINDOW:
-            LOGV("APP_CMD_TERM_WINDOW\n");
+            LOGV("APP_CMD_TERM_WINDOW");
             pthread_cond_broadcast(&android_app->cond);
             break;
 
@@ -160,7 +116,7 @@ void android_app_pre_exec_cmd(struct android_app* android_app, int8_t cmd) {
         case APP_CMD_START:
         case APP_CMD_PAUSE:
         case APP_CMD_STOP:
-            LOGV("activityState=%d\n", cmd);
+            LOGV("activityState=%d", cmd);
             pthread_mutex_lock(&android_app->mutex);
             android_app->activityState = cmd;
             pthread_cond_broadcast(&android_app->cond);
@@ -168,14 +124,14 @@ void android_app_pre_exec_cmd(struct android_app* android_app, int8_t cmd) {
             break;
 
         case APP_CMD_CONFIG_CHANGED:
-            LOGV("APP_CMD_CONFIG_CHANGED\n");
+            LOGV("APP_CMD_CONFIG_CHANGED");
             AConfiguration_fromAssetManager(android_app->config,
                     android_app->activity->assetManager);
             print_cur_config(android_app);
             break;
 
         case APP_CMD_DESTROY:
-            LOGV("APP_CMD_DESTROY\n");
+            LOGV("APP_CMD_DESTROY");
             android_app->destroyRequested = 1;
             break;
     }
@@ -184,7 +140,7 @@ void android_app_pre_exec_cmd(struct android_app* android_app, int8_t cmd) {
 void android_app_post_exec_cmd(struct android_app* android_app, int8_t cmd) {
     switch (cmd) {
         case APP_CMD_TERM_WINDOW:
-            LOGV("APP_CMD_TERM_WINDOW\n");
+            LOGV("APP_CMD_TERM_WINDOW");
             pthread_mutex_lock(&android_app->mutex);
             android_app->window = NULL;
             pthread_cond_broadcast(&android_app->cond);
@@ -192,7 +148,7 @@ void android_app_post_exec_cmd(struct android_app* android_app, int8_t cmd) {
             break;
 
         case APP_CMD_SAVE_STATE:
-            LOGV("APP_CMD_SAVE_STATE\n");
+            LOGV("APP_CMD_SAVE_STATE");
             pthread_mutex_lock(&android_app->mutex);
             android_app->stateSaved = 1;
             pthread_cond_broadcast(&android_app->cond);
@@ -206,7 +162,6 @@ void android_app_post_exec_cmd(struct android_app* android_app, int8_t cmd) {
 }
 
 void app_dummy() {
-
 }
 
 static void android_app_destroy(struct android_app* android_app) {
@@ -226,7 +181,7 @@ static void android_app_destroy(struct android_app* android_app) {
 static void process_input(struct android_app* app, struct android_poll_source* source) {
     AInputEvent* event = NULL;
     while (AInputQueue_getEvent(app->inputQueue, &event) >= 0) {
-        //LOGV("New input event: type=%d\n", AInputEvent_getType(event));
+        LOGV("New input event: type=%d", AInputEvent_getType(event));
         if (AInputQueue_preDispatchEvent(app->inputQueue, event)) {
             continue;
         }
@@ -234,14 +189,6 @@ static void process_input(struct android_app* app, struct android_poll_source* s
         if (app->onInputEvent != NULL) handled = app->onInputEvent(app, event);
         AInputQueue_finishEvent(app->inputQueue, event, handled);
     }
-}
-
-static int process_ui( int dummy1, int dummy2, void * dummy3 ) {
-	// Can't trust parameters in UI thread callback.
-	MainThreadCallbackProps rep;
-    read(gapp->uimsgread, &rep, sizeof(rep));
-	rep.callback( rep.opaque );
-	return 1;
 }
 
 static void process_cmd(struct android_app* app, struct android_poll_source* source) {
@@ -258,6 +205,7 @@ static void* android_app_entry(void* param) {
     AConfiguration_fromAssetManager(android_app->config, android_app->activity->assetManager);
 
     print_cur_config(android_app);
+
     android_app->cmdPollSource.id = LOOPER_ID_MAIN;
     android_app->cmdPollSource.app = android_app;
     android_app->cmdPollSource.process = process_cmd;
@@ -266,7 +214,8 @@ static void* android_app_entry(void* param) {
     android_app->inputPollSource.process = process_input;
 
     ALooper* looper = ALooper_prepare(ALOOPER_PREPARE_ALLOW_NON_CALLBACKS);
-    ALooper_addFd(looper, android_app->msgread, LOOPER_ID_MAIN, ALOOPER_EVENT_INPUT, NULL, &android_app->cmdPollSource);
+    ALooper_addFd(looper, android_app->msgread, LOOPER_ID_MAIN, ALOOPER_EVENT_INPUT, NULL,
+            &android_app->cmdPollSource);
     android_app->looper = looper;
 
     pthread_mutex_lock(&android_app->mutex);
@@ -285,26 +234,12 @@ static void* android_app_entry(void* param) {
 // --------------------------------------------------------------------
 
 static struct android_app* android_app_create(ANativeActivity* activity,
-        void* savedState, size_t savedStateSize) {
-    struct android_app* android_app = (struct android_app*)malloc(sizeof(struct android_app));
-    memset(android_app, 0, sizeof(struct android_app));
+                                              void* savedState, size_t savedStateSize) {
+    struct android_app* android_app = calloc(1, sizeof(struct android_app));
     android_app->activity = activity;
 
     pthread_mutex_init(&android_app->mutex, NULL);
     pthread_cond_init(&android_app->cond, NULL);
-
-
-    pthread_attr_t attr; 
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-
-	//Capture input
-    setvbuf(stdout, 0, _IOLBF, 0); // make stdout line-buffered
-    setvbuf(stderr, 0, _IONBF, 0); // make stderr unbuffered
-    pipe(pfd);
-    dup2(pfd[1], 1);
-    dup2(pfd[1], 2);
-    pthread_create(&debug_capture_thread, &attr, debug_capture_thread_fn, android_app);
 
     if (savedState != NULL) {
         android_app->savedState = malloc(savedStateSize);
@@ -320,20 +255,7 @@ static struct android_app* android_app_create(ANativeActivity* activity,
     android_app->msgread = msgpipe[0];
     android_app->msgwrite = msgpipe[1];
 
-	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	// Handle calling events on the UI thread.  You can get callbacks with RunCallbackOnUIThread.
-    int msgpipemain[2];
-    if (pipe(msgpipemain)) {
-        LOGE("could not create pipe: %s", strerror(errno));
-        return NULL;
-    }
-    android_app->uimsgread = msgpipemain[0];
-    android_app->uimsgwrite = msgpipemain[1];
-    ALooper * looper = ALooper_forThread();
-    ALooper_addFd(looper, android_app->uimsgread, LOOPER_ID_MAIN_THREAD, ALOOPER_EVENT_INPUT, process_ui, gapp);  //NOTE: Cannot use NULL callback
-    android_app->looperui = looper;
-	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+    pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
     pthread_create(&android_app->thread, &attr, android_app_entry, android_app);
@@ -350,7 +272,7 @@ static struct android_app* android_app_create(ANativeActivity* activity,
 
 static void android_app_write_cmd(struct android_app* android_app, int8_t cmd) {
     if (write(android_app->msgwrite, &cmd, sizeof(cmd)) != sizeof(cmd)) {
-        LOGE("Failure writing android_app cmd: %s\n", strerror(errno));
+        LOGE("Failure writing android_app cmd: %s", strerror(errno));
     }
 }
 
@@ -403,26 +325,30 @@ static void android_app_free(struct android_app* android_app) {
     free(android_app);
 }
 
+static struct android_app* ToApp(ANativeActivity* activity) {
+    return (struct android_app*) activity->instance;
+}
+
 static void onDestroy(ANativeActivity* activity) {
-    LOGV("Destroy: %p\n", activity);
-    android_app_free((struct android_app*)activity->instance);
+    LOGV("Destroy: %p", activity);
+    android_app_free(ToApp(activity));
 }
 
 static void onStart(ANativeActivity* activity) {
-    LOGV("Start: %p\n", activity);
-    android_app_set_activity_state((struct android_app*)activity->instance, APP_CMD_START);
+    LOGV("Start: %p", activity);
+    android_app_set_activity_state(ToApp(activity), APP_CMD_START);
 }
 
 static void onResume(ANativeActivity* activity) {
-    LOGV("Resume: %p\n", activity);
-    android_app_set_activity_state((struct android_app*)activity->instance, APP_CMD_RESUME);
+    LOGV("Resume: %p", activity);
+    android_app_set_activity_state(ToApp(activity), APP_CMD_RESUME);
 }
 
 static void* onSaveInstanceState(ANativeActivity* activity, size_t* outLen) {
-    struct android_app* android_app = (struct android_app*)activity->instance;
-    void* savedState = NULL;
+    LOGV("SaveInstanceState: %p", activity);
 
-    LOGV("SaveInstanceState: %p\n", activity);
+    struct android_app* android_app = ToApp(activity);
+    void* savedState = NULL;
     pthread_mutex_lock(&android_app->mutex);
     android_app->stateSaved = 0;
     android_app_write_cmd(android_app, APP_CMD_SAVE_STATE);
@@ -443,84 +369,89 @@ static void* onSaveInstanceState(ANativeActivity* activity, size_t* outLen) {
 }
 
 static void onPause(ANativeActivity* activity) {
-    LOGV("Pause: %p\n", activity);
-    android_app_set_activity_state((struct android_app*)activity->instance, APP_CMD_PAUSE);
+    LOGV("Pause: %p", activity);
+    android_app_set_activity_state(ToApp(activity), APP_CMD_PAUSE);
 }
 
 static void onStop(ANativeActivity* activity) {
-    LOGV("Stop: %p\n", activity);
-    android_app_set_activity_state((struct android_app*)activity->instance, APP_CMD_STOP);
+    LOGV("Stop: %p", activity);
+    android_app_set_activity_state(ToApp(activity), APP_CMD_STOP);
 }
 
 static void onConfigurationChanged(ANativeActivity* activity) {
-    struct android_app* android_app = (struct android_app*)activity->instance;
-    LOGV("ConfigurationChanged: %p\n", activity);
-    android_app_write_cmd(android_app, APP_CMD_CONFIG_CHANGED);
+    LOGV("ConfigurationChanged: %p", activity);
+    android_app_write_cmd(ToApp(activity), APP_CMD_CONFIG_CHANGED);
+}
+
+static void onContentRectChanged(ANativeActivity* activity, const ARect* r) {
+    LOGV("ContentRectChanged: l=%d,t=%d,r=%d,b=%d", r->left, r->top, r->right, r->bottom);
+    struct android_app* android_app = ToApp(activity);
+    pthread_mutex_lock(&android_app->mutex);
+    android_app->contentRect = *r;
+    pthread_mutex_unlock(&android_app->mutex);
+    android_app_write_cmd(ToApp(activity), APP_CMD_CONTENT_RECT_CHANGED);
 }
 
 static void onLowMemory(ANativeActivity* activity) {
-    struct android_app* android_app = (struct android_app*)activity->instance;
-    LOGV("LowMemory: %p\n", activity);
-    android_app_write_cmd(android_app, APP_CMD_LOW_MEMORY);
+    LOGV("LowMemory: %p", activity);
+    android_app_write_cmd(ToApp(activity), APP_CMD_LOW_MEMORY);
 }
 
 static void onWindowFocusChanged(ANativeActivity* activity, int focused) {
-    LOGV("WindowFocusChanged: %p -- %d\n", activity, focused);
-    android_app_write_cmd((struct android_app*)activity->instance,
-            focused ? APP_CMD_GAINED_FOCUS : APP_CMD_LOST_FOCUS);
+    LOGV("WindowFocusChanged: %p -- %d", activity, focused);
+    android_app_write_cmd(ToApp(activity), focused ? APP_CMD_GAINED_FOCUS : APP_CMD_LOST_FOCUS);
 }
 
 static void onNativeWindowCreated(ANativeActivity* activity, ANativeWindow* window) {
-    LOGV("NativeWindowCreated: %p -- %p\n", activity, window);
-    android_app_set_window((struct android_app*)activity->instance, window);
+    LOGV("NativeWindowCreated: %p -- %p", activity, window);
+    android_app_set_window(ToApp(activity), window);
 }
 
 static void onNativeWindowDestroyed(ANativeActivity* activity, ANativeWindow* window) {
-    LOGV("NativeWindowDestroyed: %p -- %p\n", activity, window);
-    android_app_set_window((struct android_app*)activity->instance, NULL);
+    LOGV("NativeWindowDestroyed: %p -- %p", activity, window);
+    android_app_set_window(ToApp(activity), NULL);
+}
+
+static void onNativeWindowRedrawNeeded(ANativeActivity* activity, ANativeWindow* window) {
+    LOGV("NativeWindowRedrawNeeded: %p -- %p", activity, window);
+    android_app_write_cmd(ToApp(activity), APP_CMD_WINDOW_REDRAW_NEEDED);
+}
+
+static void onNativeWindowResized(ANativeActivity* activity, ANativeWindow* window) {
+    LOGV("NativeWindowResized: %p -- %p", activity, window);
+    android_app_write_cmd(ToApp(activity), APP_CMD_WINDOW_RESIZED);
 }
 
 static void onInputQueueCreated(ANativeActivity* activity, AInputQueue* queue) {
-    LOGV("InputQueueCreated: %p -- %p\n", activity, queue);
-    android_app_set_input((struct android_app*)activity->instance, queue);
+    LOGV("InputQueueCreated: %p -- %p", activity, queue);
+    android_app_set_input(ToApp(activity), queue);
 }
 
 static void onInputQueueDestroyed(ANativeActivity* activity, AInputQueue* queue) {
-    LOGV("InputQueueDestroyed: %p -- %p\n", activity, queue);
-    android_app_set_input((struct android_app*)activity->instance, NULL);
-}
-
-static void onNativeWindowRedrawNeeded(ANativeActivity* activity, ANativeWindow *window ) {
-    LOGV("onNativeWindowRedrawNeeded: %p -- %p\n", activity, window);
+    LOGV("InputQueueDestroyed: %p -- %p", activity, queue);
+    android_app_set_input(ToApp(activity), NULL);
 }
 
 JNIEXPORT
-void ANativeActivity_onCreate(ANativeActivity* activity, void* savedState,
-                              size_t savedStateSize) {
-    LOGV("Creating: %p\n", activity);
-    activity->callbacks->onDestroy = onDestroy;
-    activity->callbacks->onStart = onStart;
-    activity->callbacks->onResume = onResume;
-    activity->callbacks->onSaveInstanceState = onSaveInstanceState;
-    activity->callbacks->onPause = onPause;
-    activity->callbacks->onStop = onStop;
+void ANativeActivity_onCreate(ANativeActivity* activity, void* savedState, size_t savedStateSize) {
+    LOGV("Creating: %p", activity);
+
     activity->callbacks->onConfigurationChanged = onConfigurationChanged;
-    activity->callbacks->onLowMemory = onLowMemory;
-    activity->callbacks->onWindowFocusChanged = onWindowFocusChanged;
-    activity->callbacks->onNativeWindowCreated = onNativeWindowCreated;
-    activity->callbacks->onNativeWindowDestroyed = onNativeWindowDestroyed;
+    activity->callbacks->onContentRectChanged = onContentRectChanged;
+    activity->callbacks->onDestroy = onDestroy;
     activity->callbacks->onInputQueueCreated = onInputQueueCreated;
     activity->callbacks->onInputQueueDestroyed = onInputQueueDestroyed;
-	activity->callbacks->onNativeWindowRedrawNeeded = onNativeWindowRedrawNeeded;
+    activity->callbacks->onLowMemory = onLowMemory;
+    activity->callbacks->onNativeWindowCreated = onNativeWindowCreated;
+    activity->callbacks->onNativeWindowDestroyed = onNativeWindowDestroyed;
+    activity->callbacks->onNativeWindowRedrawNeeded = onNativeWindowRedrawNeeded;
+    activity->callbacks->onNativeWindowResized = onNativeWindowResized;
+    activity->callbacks->onPause = onPause;
+    activity->callbacks->onResume = onResume;
+    activity->callbacks->onSaveInstanceState = onSaveInstanceState;
+    activity->callbacks->onStart = onStart;
+    activity->callbacks->onStop = onStop;
+    activity->callbacks->onWindowFocusChanged = onWindowFocusChanged;
 
     activity->instance = android_app_create(activity, savedState, savedStateSize);
 }
-
-void RunCallbackOnUIThread( void (*callback)(void *), void * opaque )
-{
-	MainThreadCallbackProps gpdata;
-	gpdata.callback = callback;
-	gpdata.opaque = opaque;
-	write(gapp->uimsgwrite, &gpdata, sizeof(gpdata) );	
-}
-
