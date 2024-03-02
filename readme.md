@@ -3,7 +3,7 @@
 **Clone Repo**
 
 ```sh
-git clone --recursive https://github.com/heaveless/seed.git
+git clone https://github.com/heaveless/seed.git
 ```
 
 **Execute**
