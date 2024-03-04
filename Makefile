@@ -13,7 +13,7 @@ KS_DNAME = "CN=heaveless.com, O=$(APP_NAME)"
 # Android
 ANDROID_VER = $(APP_SDK)
 ANDROID_SDK = $(HOME)/Android/Sdk
-ANDROID_NDK = $(wildcard $(ANDROID_SDK)/ndk/*)
+ANDROID_NDK = $(lastword $(wildcard $(ANDROID_SDK)/ndk/*))
 ANDROID_TLS = $(lastword $(wildcard $(ANDROID_SDK)/build-tools/*))
 ANDROID_CLC = $(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android$(ANDROID_VER)-clang
 
@@ -25,7 +25,7 @@ CTARGETS = build/lib/arm64-v8a/lib$(APP_NAME).so
 CFLAGS = -Iandroid
 CFLAGS += -I$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include
 CFLAGS += -I$(ANDROID_NDK)/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include/android
-LDFLAGS = -landroid -llog -shared -m64
+LDFLAGS = -landroid -llog -shared -m64 -lm -uANativeActivity_onCreate
 
 $(CTARGETS): $(CSRCS)
 	mkdir -p build/lib/arm64-v8a
