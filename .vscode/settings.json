@@ -1,6 +1,0 @@
-{
-    "files.associations": {
-        "egl.h": "c",
-        "gl3.h": "c"
-    }
-}
